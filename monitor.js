@@ -4,6 +4,7 @@ const fs = require('fs');
 const alias = process.env.UG_ID || process.env.UGID;
 const webhookUrl = process.env.WEBHOOK_URL;
 const intervalSeconds = parseInt(process.env.CHECK_INTERVAL) || 3600;
+const notifyOnFirstRun = process.env.NOTIFY_ON_FIRST_RUN === 'true';
 
 if (!alias) {
     console.error("❌ 致命错误: 缺少必填环境变量 UG_ID。程序已拒绝运行并退出。");
@@ -91,10 +92,15 @@ async function check() {
 
     console.log(`[${new Date().toLocaleString()}] 📋 对比: [${lastDomain || '(空)'}] vs [${currentDomain}]`);
 
-    // 首次运行：只保存，不发通知
+    // 首次运行：根据 NOTIFY_ON_FIRST_RUN 决定是否发送通知
     if (!lastDomain) {
-        console.log(`[${new Date().toLocaleString()}] 📝 首次运行，保存当前域名，不发送通知: ${currentDomain}`);
         fs.writeFileSync(lastDomainFile, currentDomain);
+        if (notifyOnFirstRun) {
+            console.log(`[${new Date().toLocaleString()}] 📝 首次运行，发送测试通知: ${currentDomain}`);
+            await sendNotification('(首次运行)', currentDomain);
+        } else {
+            console.log(`[${new Date().toLocaleString()}] 📝 首次运行，保存当前域名，不发送通知: ${currentDomain}`);
+        }
         return;
     }
 

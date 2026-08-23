@@ -7,7 +7,7 @@ const path = require('node:path');
 async function testConfig(overrides = {}) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-ugid-test-'));
   return {
-    alias: 'bmnd',
+    alias: 'test-alias',
     apiUrl: 'https://api.example.test/relay',
     notification: {
       driver: 'hermes',

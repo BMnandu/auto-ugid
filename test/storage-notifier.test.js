@@ -38,7 +38,7 @@ test('version 1 state migrates to version 2 and removes Emby fields', async () =
   const loaded = await loadState(config, silentLogger());
   assert.equal(loaded.migrated, true);
   assert.equal(loaded.state.version, 2);
-  assert.equal(loaded.state.currentDomain, 'bmnd.cn59.ug.link');
+  assert.equal(loaded.state.currentDomain, 'test-alias.cn59.ug.link');
   assert.equal('serverId' in loaded.state, false);
   assert.equal('candidateAlertKey' in loaded.state, false);
   assert.deepEqual(JSON.parse(await fs.readFile(config.stateFile, 'utf8')), loaded.state);
@@ -47,9 +47,9 @@ test('version 1 state migrates to version 2 and removes Emby fields', async () =
 test('version 2 state round-trips and corrupt state is preserved', async () => {
   const config = await testConfig();
   const first = await loadState(config, silentLogger());
-  first.state.currentDomain = 'bmnd.cn59.ug.link';
+  first.state.currentDomain = 'test-alias.cn59.ug.link';
   await saveState(config, first.state);
-  assert.equal((await loadState(config, silentLogger())).state.currentDomain, 'bmnd.cn59.ug.link');
+  assert.equal((await loadState(config, silentLogger())).state.currentDomain, 'test-alias.cn59.ug.link');
 
   await fs.writeFile(config.stateFile, '{broken', 'utf8');
   const recovered = await loadState(config, silentLogger(), 1700000000000);
@@ -62,7 +62,7 @@ test('legacy text domain imports as a full hostname', async () => {
   const config = await testConfig();
   await fs.writeFile(config.legacyDomainFile, 'cn61.ug.link\n');
   const loaded = await loadState(config, silentLogger());
-  assert.equal(loaded.state.currentDomain, 'bmnd.cn61.ug.link');
+  assert.equal(loaded.state.currentDomain, 'test-alias.cn61.ug.link');
 });
 
 test('atomic JSON helper leaves complete JSON', async () => {

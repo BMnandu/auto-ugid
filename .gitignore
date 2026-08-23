@@ -6,3 +6,10 @@ node_modules/
 
 # macOS
 .DS_Store
+
+# 环境变量与本地运行数据
+.env
+.env.*
+!.env.example
+data/
+*.corrupt-*

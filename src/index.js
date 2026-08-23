@@ -18,7 +18,7 @@ const HELP = `auto-ugid - 通用 UGLink 中继域名监控器
   NOTIFICATION_DRIVER     hermes、wecom 或 generic
 
 常用环境变量：
-  UG_ID                   UGLink alias（默认：bmnd）
+  UG_ID                   UGLink alias（必填，兼容 UGID）
   CHECK_INTERVAL          检查周期秒数（默认：600）
   CONFIRMATION_DELAY      二次确认等待秒数（默认：20）
   STATE_DIR               持久化目录（默认：/data）

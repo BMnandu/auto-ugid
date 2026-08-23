@@ -95,7 +95,8 @@ function loadNotificationConfig(env) {
 }
 
 function loadConfig(env = process.env) {
-  const alias = (env.UG_ID || env.UGID || 'bmnd').trim();
+  const alias = env.UG_ID?.trim() || env.UGID?.trim();
+  if (!alias) throw new Error('UG_ID is required');
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(alias)) {
     throw new Error('UG_ID must be a lowercase DNS label');
   }

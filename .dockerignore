@@ -6,3 +6,7 @@ npm-debug.log
 test
 scripts
 *.corrupt-*
+
+.env
+.env.*
+!.env.example

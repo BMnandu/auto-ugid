@@ -1,0 +1,18 @@
+services:
+  auto-ugid:
+    build: .
+    image: beiming712/auto-uglink:latest
+    container_name: uglink
+    restart: unless-stopped
+    environment:
+      UG_ID: bmnd
+      CHECK_INTERVAL: "600"
+      CONFIRMATION_DELAY: "20"
+      REQUEST_TIMEOUT: "10"
+      SOURCE_FAILURE_THRESHOLD: "3"
+      NOTIFICATION_MAX_ATTEMPTS: "5"
+      NOTIFICATION_BACKOFF: "30"
+      HERMES_WEBHOOK_URL: http://192.168.31.33:8644/webhooks/uglink-status
+      HERMES_WEBHOOK_SECRET: ${HERMES_WEBHOOK_SECRET:?set HERMES_WEBHOOK_SECRET}
+    volumes:
+      - ./data:/data

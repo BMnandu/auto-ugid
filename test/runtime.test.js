@@ -2,7 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { HELP, waitUntilNextCheck } = require('../src/index');
+const { version: packageVersion } = require('../package.json');
+const { HELP, VERSION, waitUntilNextCheck } = require('../src/index');
+
+test('version matches the package metadata', () => {
+  assert.equal(VERSION, packageVersion);
+  assert.equal(VERSION, '1.2.1');
+});
 
 test('help documents the required alias', () => {
   const aliasLine = HELP.split(String.fromCharCode(10)).find((line) => line.trimStart().startsWith('UG_ID'));

@@ -12,8 +12,8 @@ const event = {
   event_id: 'relay_changed-1',
   event_type: 'relay_changed',
   message: 'UGLink 域名已更新',
-  old_domain: 'bmnd.cn58.ug.link',
-  new_domain: 'bmnd.cn59.ug.link'
+  old_domain: 'test-alias.cn58.ug.link',
+  new_domain: 'test-alias.cn59.ug.link'
 };
 
 test('Hermes driver signs the exact structured event with HMAC V2', async () => {

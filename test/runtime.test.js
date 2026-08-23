@@ -2,7 +2,12 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { waitUntilNextCheck } = require('../src/index');
+const { HELP, waitUntilNextCheck } = require('../src/index');
+
+test('help documents the required alias', () => {
+  const aliasLine = HELP.split(String.fromCharCode(10)).find((line) => line.trimStart().startsWith('UG_ID'));
+  assert.equal(aliasLine.trim(), 'UG_ID                   UGLink alias（必填，兼容 UGID）');
+});
 
 test('the interval wait can be interrupted for graceful shutdown', async () => {
   let wake;

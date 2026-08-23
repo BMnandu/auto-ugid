@@ -13,7 +13,7 @@
       ↓
 严格白名单校验
       ↓
-规范化为完整主机名（bmnd.cn59.ug.link）
+规范化为完整主机名（your-id.cn59.ug.link）
       ↓
 延时二次确认
       ↓
@@ -25,13 +25,14 @@
   └── Generic：标准 JSON POST，可选 Bearer Token
 ```
 
-API 返回的 `cn59.ug.link` 和 `bmnd.cn59.ug.link` 会被视为同一个中继域名，状态和通知统一使用完整主机名 `bmnd.cn59.ug.link`，对外地址统一为 `https://bmnd.cn59.ug.link`。
+API 返回的 `cn59.ug.link` 和 `your-id.cn59.ug.link` 会被视为同一个中继域名，状态和通知统一使用完整主机名 `your-id.cn59.ug.link`，对外地址统一为 `https://your-id.cn59.ug.link`。
 
 ## 快速开始
 
 ### Hermes 驱动
 
 ```bash
+export UG_ID='your-id'
 export HERMES_WEBHOOK_SECRET='请替换为受控凭据'
 docker compose config
 docker compose up -d
@@ -128,10 +129,10 @@ environment:
   "message": "UGLink 域名已更新……",
   "data": {
     "event_id": "relay_changed-...",
-    "old_domain": "bmnd.cn58.ug.link",
-    "new_domain": "bmnd.cn59.ug.link",
-    "old_url": "https://bmnd.cn58.ug.link",
-    "new_url": "https://bmnd.cn59.ug.link"
+    "old_domain": "your-id.cn58.ug.link",
+    "new_domain": "your-id.cn59.ug.link",
+    "old_url": "https://your-id.cn58.ug.link",
+    "new_url": "https://your-id.cn59.ug.link"
   }
 }
 ```
@@ -140,7 +141,7 @@ environment:
 
 | 变量 | 必填 | 默认值 | 说明 |
 |---|---:|---:|---|
-| `UG_ID` / `UGID` | 否 | `bmnd` | UGLink alias 与完整域名前缀 |
+| `UG_ID` / `UGID` | 是 | — | UGLink alias 与完整域名前缀 |
 | `NOTIFICATION_DRIVER` | 否 | 自动识别 | `hermes`、`wecom` 或 `generic` |
 | `CHECK_INTERVAL` | 否 | `600` | 检查周期秒数，最小值 30 |
 | `CONFIRMATION_DELAY` | 否 | `20` | 二次确认等待秒数 |
@@ -153,7 +154,11 @@ environment:
 | `LEGACY_DOMAIN_FILE` | 否 | `/app/last_domain.txt` | 旧版文本状态迁移位置 |
 | `UGLINK_API_URL` | 否 | 绿联生产 API | 仅供测试覆盖 API 地址 |
 
+`UG_ID` 没有内置默认值；推荐使用 `UG_ID`，`UGID` 仅作为兼容变量保留。Compose 示例会在变量缺失时直接报错。
+
 所有 Secret 和 Token 都必须通过容器环境变量或其他受控凭据系统注入，不得提交到 Git、Compose、日志或文档中。
+
+仓库同时在 `.gitignore` 与 `.dockerignore` 中排除了 `.env`、本地 `data/` 和损坏状态备份，避免凭据或运行数据被误提交或发送到 Docker 构建上下文；如需提供模板，请使用不含真实值的 `.env.example`。
 
 ## 事件与通知内容
 
@@ -161,8 +166,8 @@ environment:
 
 ```text
 UGLink 域名已更新：
-旧地址：https://bmnd.cn58.ug.link
-新地址：https://bmnd.cn59.ug.link
+旧地址：https://your-id.cn58.ug.link
+新地址：https://your-id.cn59.ug.link
 时间：2026-08-23 16:50:00 +08:00
 ```
 
@@ -181,7 +186,7 @@ UGLink 域名已更新：
 ```json
 {
   "version": 2,
-  "currentDomain": "bmnd.cn59.ug.link",
+  "currentDomain": "your-id.cn59.ug.link",
   "consecutiveSourceFailures": 0,
   "sourceAlertSent": false,
   "sourceAlertEventId": null,
@@ -215,16 +220,17 @@ docker build -t auto-ugid:test .
 ## 升级步骤
 
 1. 备份当前 Compose、镜像摘要和整个 `/data` 目录；
-2. 根据目标通道配置 `NOTIFICATION_DRIVER` 和对应 URL/凭据；
-3. 如从现有 Hermes 版本升级，可以继续使用 `HERMES_WEBHOOK_URL` 与 `HERMES_WEBHOOK_SECRET`；
-4. 如从旧企业微信版本升级，推荐把 `WEBHOOK_URL` 改名为 `WECOM_WEBHOOK_URL`；旧 URL 兼容自动识别仍然保留；
-5. 启动新容器，确认日志中的驱动名称和 `state.json` v2 迁移结果；
-6. 分别验证无变化静默、域名变化、来源异常/恢复和通知重试；
-7. 取得真实运行证据后，才能记录为已部署。
+2. 显式配置 `UG_ID`；v1.2.1 起不再提供个人 alias 默认值；
+3. 根据目标通道配置 `NOTIFICATION_DRIVER` 和对应 URL/凭据；
+4. 如从现有 Hermes 版本升级，可以继续使用 `HERMES_WEBHOOK_URL` 与 `HERMES_WEBHOOK_SECRET`；
+5. 如从旧企业微信版本升级，推荐把 `WEBHOOK_URL` 改名为 `WECOM_WEBHOOK_URL`；旧 URL 兼容自动识别仍然保留；
+6. 启动新容器，确认日志中的驱动名称和 `state.json` v2 迁移结果；
+7. 分别验证无变化静默、域名变化、来源异常/恢复和通知重试；
+8. 取得真实运行证据后，才能记录为已部署。
 
 ## 回滚
 
-1. 停止 v1.2.0 容器；
+1. 停止 v1.2.1 容器；
 2. 恢复旧 Compose 和上一版本镜像摘要；
 3. 恢复升级前备份的 `/data` 目录。旧版本无法读取 v2 状态，因此不能直接复用已迁移的 `state.json`；
 4. 启动旧容器并重新验证查询与通知行为。

@@ -5,7 +5,7 @@ function escapeRegExp(value) {
 }
 
 function expectedDomainPattern(alias) {
-  return new RegExp(`^${escapeRegExp(alias)}\\.cn[0-9]+\\.ug\\.link$`);
+  return new RegExp(`^(?:${escapeRegExp(alias)}\\.)?cn[0-9]+\\.ug\\.link$`);
 }
 
 function validateRelayDomain(domain, alias) {

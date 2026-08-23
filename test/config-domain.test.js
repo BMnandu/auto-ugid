@@ -5,17 +5,22 @@ const test = require('node:test');
 const { loadConfig } = require('../src/config');
 const { expectedDomainPattern, validateRelayDomain } = require('../src/domain');
 
-test('strict domain validation only accepts alias.cn<digits>.ug.link', () => {
+test('strict domain validation accepts relay domains with an optional alias prefix', () => {
+  assert.equal(validateRelayDomain('cn59.ug.link', 'bmnd'), true);
   assert.equal(validateRelayDomain('bmnd.cn59.ug.link', 'bmnd'), true);
-  assert.equal(validateRelayDomain('bmnd.cn0.ug.link', 'bmnd'), true);
+  assert.equal(validateRelayDomain('cn1.ug.link', 'bmnd'), true);
   for (const value of [
     'evil.cn59.ug.link',
+    'fakecn59.ug.link',
     'bmnd.cn.ug.link',
     'bmnd.cn59.ug.link.evil.test',
     'BMND.cn59.ug.link',
     'bmnd.cn59xug.link',
-    'https://bmnd.cn59.ug.link'
+    'https://bmnd.cn59.ug.link',
+    'cn59.evil.com',
+    'bmnd.other.link'
   ]) assert.equal(validateRelayDomain(value, 'bmnd'), false, value);
+  assert.equal(validateRelayDomain('cn12.ug.link', 'a-b'), true);
   assert.equal(expectedDomainPattern('a-b').test('a-b.cn12.ug.link'), true);
 });
 

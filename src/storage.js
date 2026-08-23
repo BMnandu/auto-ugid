@@ -2,29 +2,45 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { normalizeRelayDomain } = require('./domain');
 const { isoNow } = require('./time');
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 
 function defaultState() {
   return {
     version: STATE_VERSION,
     currentDomain: null,
-    serverId: null,
     consecutiveSourceFailures: 0,
     sourceAlertSent: false,
     sourceAlertEventId: null,
-    candidateAlertKey: null,
     lastSuccessfulCheckAt: null,
     lastChangeAt: null
   };
 }
 
-function normalizeState(value) {
-  if (!value || typeof value !== 'object' || value.version !== STATE_VERSION) {
+function normalizeCurrentDomain(value, alias) {
+  if (value === null || value === undefined || value === '') return null;
+  return normalizeRelayDomain(value, alias);
+}
+
+function normalizeState(value, alias) {
+  if (!value || typeof value !== 'object' || ![1, STATE_VERSION].includes(value.version)) {
     throw new Error('unsupported or missing state version');
   }
-  return { ...defaultState(), ...value, version: STATE_VERSION };
+  return {
+    ...defaultState(),
+    currentDomain: normalizeCurrentDomain(value.currentDomain, alias),
+    consecutiveSourceFailures: Number.isInteger(value.consecutiveSourceFailures)
+      ? Math.max(0, value.consecutiveSourceFailures) : 0,
+    sourceAlertSent: value.sourceAlertSent === true,
+    sourceAlertEventId: typeof value.sourceAlertEventId === 'string'
+      ? value.sourceAlertEventId : null,
+    lastSuccessfulCheckAt: typeof value.lastSuccessfulCheckAt === 'string'
+      ? value.lastSuccessfulCheckAt : null,
+    lastChangeAt: typeof value.lastChangeAt === 'string' ? value.lastChangeAt : null,
+    version: STATE_VERSION
+  };
 }
 
 async function ensureDirectory(directory) {
@@ -57,16 +73,6 @@ async function atomicWriteJson(file, value) {
   await syncDirectory(path.dirname(file));
 }
 
-async function pathExists(file) {
-  try {
-    await fs.access(file);
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
 async function preserveCorruptFile(file, now = Date.now()) {
   const suffix = new Date(now).toISOString().replace(/[:.]/g, '-');
   const destination = `${file}.corrupt-${suffix}`;
@@ -74,25 +80,46 @@ async function preserveCorruptFile(file, now = Date.now()) {
   return destination;
 }
 
+async function readExistingState(config) {
+  try {
+    return await fs.readFile(config.stateFile, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 async function loadState(config, logger = console, now = Date.now()) {
   await ensureDirectory(config.stateDir);
-  try {
-    const raw = await fs.readFile(config.stateFile, 'utf8');
-    return { state: normalizeState(JSON.parse(raw)), migrated: false, corruptBackup: null };
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
+  const raw = await readExistingState(config);
+  if (raw !== null) {
+    let parsed;
+    let state;
+    try {
+      parsed = JSON.parse(raw);
+      state = normalizeState(parsed, config.alias);
+    } catch {
       const backup = await preserveCorruptFile(config.stateFile, now);
       logger.error(`State file was invalid and preserved as ${path.basename(backup)}`);
       return { state: defaultState(), migrated: false, corruptBackup: backup };
     }
+    const migrated = parsed.version !== STATE_VERSION;
+    if (migrated) {
+      await atomicWriteJson(config.stateFile, state);
+      logger.info('Migrated state.json from version 1 to version 2');
+    }
+    return { state, migrated, corruptBackup: null };
   }
 
   try {
     const legacyDomain = (await fs.readFile(config.legacyDomainFile, 'utf8')).trim();
     if (legacyDomain) {
-      const state = { ...defaultState(), currentDomain: legacyDomain };
+      const state = {
+        ...defaultState(),
+        currentDomain: normalizeRelayDomain(legacyDomain, config.alias)
+      };
       await atomicWriteJson(config.stateFile, state);
-      logger.info('Imported the legacy domain baseline; Emby Server ID will be established before changes are accepted');
+      logger.info('Imported the legacy domain baseline');
       return { state, migrated: true, corruptBackup: null };
     }
   } catch (error) {
@@ -102,7 +129,7 @@ async function loadState(config, logger = console, now = Date.now()) {
 }
 
 async function saveState(config, state) {
-  await atomicWriteJson(config.stateFile, normalizeState(state));
+  await atomicWriteJson(config.stateFile, normalizeState(state, config.alias));
 }
 
 async function appendEvent(config, event) {
@@ -138,6 +165,7 @@ function stateEvent(reason, details = {}, now = Date.now()) {
 }
 
 module.exports = {
+  STATE_VERSION,
   appendEvent,
   atomicWriteJson,
   defaultState,
@@ -145,7 +173,6 @@ module.exports = {
   loadPending,
   loadState,
   normalizeState,
-  pathExists,
   savePending,
   saveState,
   stateEvent

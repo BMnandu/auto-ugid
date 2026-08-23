@@ -1,45 +1,35 @@
 # auto-ugid
 
-`auto-ugid` 是一个面向 UGLink 与 Emby 的中继域名监控器。它会定期查询绿联官方 API，在中继域名发生变化时执行严格校验、延时二次确认和 Emby Server ID 身份验证，确认新地址可信后再通过 Hermes Webhook 推送通知。
+`auto-ugid` 是一个通用的 UGLink 中继域名监控器。它定期查询绿联官方 API，严格校验并延时二次确认中继域名变化，然后通过可插拔通知驱动发送完整访问地址。
 
-域名没有变化时保持静默，不会重复发送通知。
-
-本仓库只包含监控程序、测试和部署示例，不会自动创建 Hermes 路由、修改 NAS 容器或写入生产凭据。
+程序不再依赖 Emby 或其他具体业务服务。只要绿联 API 能返回有效中继域名，监控器就可以独立工作；域名没有变化时保持静默。
 
 ## 工作流程
 
 ```text
 绿联官方 API
       ↓
-获取 relayDomain
+获取 relayDomain（例如 cn59.ug.link）
       ↓
 严格白名单校验
       ↓
-延时后再次查询确认
+规范化为完整主机名（bmnd.cn59.ug.link）
       ↓
-Emby 公共信息与 Server ID 校验
+延时二次确认
       ↓
-原子更新本地状态
+原子更新 /data/state.json
       ↓
-HMAC-SHA256 Webhook → Hermes deliver_only → 微信
+通知驱动
+  ├── Hermes：结构化 JSON + HMAC-SHA256 V2
+  ├── 企业微信：群机器人 text Payload
+  └── Generic：标准 JSON POST，可选 Bearer Token
 ```
 
-候选域名只有通过以下全部门禁后才会被提交：
-
-1. UGLink API 成功返回 `relayDomain`；
-2. 域名严格匹配 `cn<数字>.ug.link` 或 `<alias>.cn<数字>.ug.link`；
-3. 等待 `CONFIRMATION_DELAY` 后再次查询，结果与第一次完全一致；
-4. `https://<域名>/emby/System/Info/Public` 返回有效 JSON，并包含 `Id`、`ServerName` 和 `Version`；
-5. 返回的 Emby `Id` 与持久化的 Server ID 基线一致。
-
-首次健康运行会建立域名和 Server ID 基线，默认不发送通知。旧版 `/app/last_domain.txt` 可以迁移，但程序必须先通过旧域名建立 Emby Server ID 基线，之后才会接受域名变化。
+API 返回的 `cn59.ug.link` 和 `bmnd.cn59.ug.link` 会被视为同一个中继域名，状态和通知统一使用完整主机名 `bmnd.cn59.ug.link`，对外地址统一为 `https://bmnd.cn59.ug.link`。
 
 ## 快速开始
 
-### 使用 Docker Compose
-
-1. 检查并按实际环境调整 [`docker-compose.yaml`](docker-compose.yaml)。
-2. 通过受控方式提供 Hermes Webhook Secret，不要将真实 Secret 写入 Compose 文件：
+### Hermes 驱动
 
 ```bash
 export HERMES_WEBHOOK_SECRET='请替换为受控凭据'
@@ -47,87 +37,171 @@ docker compose config
 docker compose up -d
 ```
 
-3. 查看运行日志，并确认 `/data/state.json` 已建立正确的域名和 Emby Server ID 基线。
-
-上述命令是部署示例。执行前应备份现有 Compose、状态文件和旧容器配置。
+仓库中的 [`docker-compose.yaml`](docker-compose.yaml) 默认演示 Hermes 驱动。执行前请检查 URL、alias、持久化目录和镜像版本。
 
 ### 单次检查
 
-在已经配置环境变量的情况下，可以执行一次检查后退出：
+在已配置环境变量的情况下执行一次检查：
 
 ```bash
 npm run start -- --once
 ```
 
-查看无副作用的命令帮助：
+查看无副作用帮助：
 
 ```bash
 npm run start -- --help
 ```
 
-## 环境变量
+## 通知驱动
+
+### 驱动选择规则
+
+推荐显式设置 `NOTIFICATION_DRIVER`：
+
+| 驱动 | `NOTIFICATION_DRIVER` | 必填配置 | 可选配置 |
+|---|---|---|---|
+| Hermes | `hermes` | `HERMES_WEBHOOK_URL`、`HERMES_WEBHOOK_SECRET` | — |
+| 企业微信 | `wecom` | `WECOM_WEBHOOK_URL` | — |
+| 通用 Webhook | `generic` | `GENERIC_WEBHOOK_URL` | `GENERIC_WEBHOOK_TOKEN` |
+
+未显式设置时，程序按以下顺序自动识别：
+
+1. 提供 `HERMES_WEBHOOK_SECRET` 或 `HERMES_WEBHOOK_URL` → `hermes`；
+2. 提供 `WECOM_WEBHOOK_URL`，或 `WEBHOOK_URL` 的主机名为 `qyapi.weixin.qq.com` → `wecom`；
+3. 提供 `GENERIC_WEBHOOK_URL` 或其他 `WEBHOOK_URL` → `generic`。
+
+`WEBHOOK_URL` 仅作为兼容别名保留。新配置应优先使用各驱动的专用 URL 变量，避免自动识别产生歧义。
+
+### Hermes
+
+```yaml
+environment:
+  NOTIFICATION_DRIVER: hermes
+  HERMES_WEBHOOK_URL: http://hermes-host:8644/webhooks/uglink-status
+  HERMES_WEBHOOK_SECRET: ${HERMES_WEBHOOK_SECRET:?set HERMES_WEBHOOK_SECRET}
+```
+
+Hermes 驱动发送完整结构化事件，并使用：
+
+- `X-Webhook-Timestamp`：Unix 秒级时间戳；
+- `X-Webhook-Signature-V2`：对 `<timestamp>.<原始 JSON 请求体>` 计算的 HMAC-SHA256 十六进制摘要；
+- `X-Request-ID`：重试期间稳定不变的 `event_id`。
+
+Hermes 路由可以使用 `deliver_only: true` 和 `prompt: "{message}"` 直接投递消息，不启动模型。
+
+### 企业微信
+
+```yaml
+environment:
+  NOTIFICATION_DRIVER: wecom
+  WECOM_WEBHOOK_URL: ${WECOM_WEBHOOK_URL:?set WECOM_WEBHOOK_URL}
+```
+
+Payload 为企业微信群机器人原生格式：
+
+```json
+{
+  "msgtype": "text",
+  "text": {
+    "content": "UGLink 域名已更新……"
+  }
+}
+```
+
+除 HTTP 状态外，驱动还会检查响应中的非零 `errcode`。
+
+### 通用 Webhook
+
+```yaml
+environment:
+  NOTIFICATION_DRIVER: generic
+  GENERIC_WEBHOOK_URL: https://hooks.example.com/uglink
+  GENERIC_WEBHOOK_TOKEN: ${GENERIC_WEBHOOK_TOKEN:-}
+```
+
+如果提供 `GENERIC_WEBHOOK_TOKEN`，请求会携带 `Authorization: Bearer <token>`。Payload 格式为：
+
+```json
+{
+  "event": "relay_changed",
+  "message": "UGLink 域名已更新……",
+  "data": {
+    "event_id": "relay_changed-...",
+    "old_domain": "bmnd.cn58.ug.link",
+    "new_domain": "bmnd.cn59.ug.link",
+    "old_url": "https://bmnd.cn58.ug.link",
+    "new_url": "https://bmnd.cn59.ug.link"
+  }
+}
+```
+
+## 通用环境变量
 
 | 变量 | 必填 | 默认值 | 说明 |
 |---|---:|---:|---|
-| `UG_ID` / `UGID` | 否 | `bmnd` | UGLink alias，以及可选域名前缀的白名单依据 |
-| `HERMES_WEBHOOK_URL` | 是 | — | Hermes `/webhooks/<route>` 地址 |
-| `HERMES_WEBHOOK_SECRET` | 是 | — | 路由独立使用的 HMAC Secret |
-| `CHECK_INTERVAL` | 否 | `600` | 检查周期，单位为秒，最小值为 30 |
-| `CONFIRMATION_DELAY` | 否 | `20` | 域名变化后二次确认的等待时间，单位为秒 |
-| `REQUEST_TIMEOUT` | 否 | `10` | HTTP 请求超时，单位为秒 |
-| `SOURCE_FAILURE_THRESHOLD` | 否 | `3` | 连续查询失败多少次后发送一次来源异常通知 |
-| `NOTIFICATION_MAX_ATTEMPTS` | 否 | `5` | 单条 Hermes 通知的最大投递次数 |
-| `NOTIFICATION_BACKOFF` | 否 | `30` | 通知首次重试退避时间，单位为秒 |
-| `NOTIFY_ON_FIRST_RUN` | 否 | `false` | 为 `true` 时在首次建立基线后发送通知 |
-| `STATE_DIR` | 否 | `/data` | 状态、事件与通知队列的持久化目录 |
-| `LEGACY_DOMAIN_FILE` | 否 | `/app/last_domain.txt` | 旧版域名状态文件的迁移位置 |
-| `UGLINK_API_URL` | 否 | 绿联生产 API | 仅供测试时覆盖 API 地址 |
+| `UG_ID` / `UGID` | 否 | `bmnd` | UGLink alias 与完整域名前缀 |
+| `NOTIFICATION_DRIVER` | 否 | 自动识别 | `hermes`、`wecom` 或 `generic` |
+| `CHECK_INTERVAL` | 否 | `600` | 检查周期秒数，最小值 30 |
+| `CONFIRMATION_DELAY` | 否 | `20` | 二次确认等待秒数 |
+| `REQUEST_TIMEOUT` | 否 | `10` | HTTP 请求超时秒数 |
+| `SOURCE_FAILURE_THRESHOLD` | 否 | `3` | 连续查询失败多少次后告警一次 |
+| `NOTIFICATION_MAX_ATTEMPTS` | 否 | `5` | 单条通知最大投递次数 |
+| `NOTIFICATION_BACKOFF` | 否 | `30` | 首次重试退避秒数，后续指数增长 |
+| `NOTIFY_ON_FIRST_RUN` | 否 | `false` | 首次建立基线后是否通知 |
+| `STATE_DIR` | 否 | `/data` | 持久化目录 |
+| `LEGACY_DOMAIN_FILE` | 否 | `/app/last_domain.txt` | 旧版文本状态迁移位置 |
+| `UGLINK_API_URL` | 否 | 绿联生产 API | 仅供测试覆盖 API 地址 |
 
-`WEBHOOK_URL` 暂时作为 `HERMES_WEBHOOK_URL` 的弃用兼容别名。它会被当作 Hermes Webhook 地址处理，不再表示企业微信机器人地址。不要同时配置两个变量，也不要期待一次事件被双重投递。
+所有 Secret 和 Token 都必须通过容器环境变量或其他受控凭据系统注入，不得提交到 Git、Compose、日志或文档中。
 
-所有 Secret 都应通过容器环境变量或其他受控凭据系统注入，不得提交到 Git、Compose、日志或文档中。
+## 事件与通知内容
 
-## Hermes Webhook 配置
+域名变化通知不包含具体业务应用名称：
 
-程序采用 Hermes 通用 Webhook HMAC V2 格式：
-
-- `X-Webhook-Timestamp`：Unix 秒级时间戳；
-- `X-Webhook-Signature-V2`：对 `<timestamp>.<原始 JSON 请求体>` 计算 HMAC-SHA256 后得到的小写十六进制摘要；
-- `X-Request-ID`：重试期间保持不变的稳定 `event_id`。
-
-该格式与 Hermes 当前的 [`gateway/platforms/webhook.py`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/webhook.py) 实现一致。Hermes 会检查时间戳的重放保护窗口，因此 NAS 与 Hermes 主机必须保持时钟同步。
-
-以下是供人工审阅的 Hermes 路由示例。创建或修改该路由属于独立的生产操作，本仓库不会自动执行：
-
-```yaml
-platforms:
-  webhook:
-    enabled: true
-    extra:
-      port: 8644
-      routes:
-        uglink-status:
-          secret: "<路由独立 Secret>"
-          deliver: "weixin"
-          deliver_only: true
-          prompt: "{message}"
+```text
+UGLink 域名已更新：
+旧地址：https://bmnd.cn58.ug.link
+新地址：https://bmnd.cn59.ug.link
+时间：2026-08-23 16:50:00 +08:00
 ```
 
-如果微信默认主通道不是目标接收方，应在 Hermes 侧配置相应的 `deliver_extra.chat_id`。
+程序还会对绿联 API 连续异常和恢复发送去重通知。非法域名与二次确认不一致只写入本地事件审计，不覆盖当前状态，也不会重复向外推送候选告警。
 
-## 持久化文件
+## 状态与持久化
 
-生产运行时必须持久化挂载 `/data`。程序会维护：
+生产运行时必须持久化挂载 `/data`：
 
-- `/data/state.json`：当前已提交域名、Emby Server ID、连续失败次数和告警状态；
-- `/data/events.jsonl`：不包含凭据的必要事件审计摘要；
-- `/data/pending-notifications.json`：带次数上限和退避策略的通知重试队列。
+- `/data/state.json`：当前完整域名、来源失败次数和告警状态；
+- `/data/events.jsonl`：不包含凭据的事件审计摘要；
+- `/data/pending-notifications.json`：通知重试队列。
 
-JSON 状态通过临时文件、`fsync` 和原子 `rename` 写入。损坏的状态文件或通知队列会先保留为 `.corrupt-<时间>` 文件，再使用安全的空结构继续处理。
+状态文件版本为 v2：
+
+```json
+{
+  "version": 2,
+  "currentDomain": "bmnd.cn59.ug.link",
+  "consecutiveSourceFailures": 0,
+  "sourceAlertSent": false,
+  "sourceAlertEventId": null,
+  "lastSuccessfulCheckAt": "2026-08-23T08:50:00.000Z",
+  "lastChangeAt": "2026-08-23T08:50:00.000Z"
+}
+```
+
+程序启动时会自动把 v1 状态迁移为 v2：
+
+- 删除旧 `serverId` 和候选告警字段；
+- 将 `cn<N>.ug.link` 规范化为 `<alias>.cn<N>.ug.link`；
+- 保留来源失败、告警和时间字段；
+- 原子写回 `state.json`。
+
+JSON 状态通过临时文件、`fsync` 和原子 `rename` 更新。损坏文件会先保留为 `.corrupt-<时间>` 文件。
 
 ## 本地开发与测试
 
-容器和 CI 使用 Node.js 24 LTS。运行时没有第三方依赖。
+容器与 CI 使用 Node.js 24 LTS，运行时没有第三方依赖。
 
 ```bash
 npm test
@@ -136,33 +210,27 @@ npm run start -- --help
 docker build -t auto-ugid:test .
 ```
 
-自动测试使用 Mock，不会访问真实的 UGLink API、Emby 或 Hermes。
+自动测试使用 Mock，不访问真实 UGLink API、Hermes、企业微信或通用 Webhook。
 
-## 升级与状态迁移
+## 升级步骤
 
-1. 备份当前 Compose、镜像标签或摘要，以及旧容器中的 `/app/last_domain.txt`；
-2. 准备一个持久化的宿主机目录并挂载到 `/data`；
-3. 如需保留旧域名基线，将 `last_domain.txt` 复制到受保护的宿主机位置，并在首次启动时只读挂载到 `/app/last_domain.txt`；也可以不迁移，让当前健康的 Emby 实例重新建立基线；
-4. 单独配置 Hermes 路由与 Secret，并在替换生产容器前发送受控测试事件；
-5. 启动新容器，检查 `state.json` 中的域名和 Server ID 是否符合预期；当 `NOTIFY_ON_FIRST_RUN=false` 时，建立基线不会发送通知；
-6. 验证无变化静默、来源异常只告警一次、恢复只通知一次，以及容器重启后不会虚假报变更；
-7. 取得真实运行证据后，才能将本次变更记录为已部署。
-
-不要把旧的企业微信机器人 URL 作为 Hermes Webhook 地址继续使用。
+1. 备份当前 Compose、镜像摘要和整个 `/data` 目录；
+2. 根据目标通道配置 `NOTIFICATION_DRIVER` 和对应 URL/凭据；
+3. 如从现有 Hermes 版本升级，可以继续使用 `HERMES_WEBHOOK_URL` 与 `HERMES_WEBHOOK_SECRET`；
+4. 如从旧企业微信版本升级，推荐把 `WEBHOOK_URL` 改名为 `WECOM_WEBHOOK_URL`；旧 URL 兼容自动识别仍然保留；
+5. 启动新容器，确认日志中的驱动名称和 `state.json` v2 迁移结果；
+6. 分别验证无变化静默、域名变化、来源异常/恢复和通知重试；
+7. 取得真实运行证据后，才能记录为已部署。
 
 ## 回滚
 
-1. 停止新容器；
-2. 恢复备份的 Compose 与上一版本镜像标签或摘要；
-3. 如果旧镜像依赖 `last_domain.txt`，恢复对应状态文件；
-4. 保留新版 `/data` 目录用于排查，旧版本无需直接使用该目录；
-5. 启动旧容器，并重新验证其查询与通知行为。
-
-代码回滚本身不能证明 UGLink、Emby、Hermes 或微信投递链路健康，仍需分别进行生产核验。
+1. 停止 v1.2.0 容器；
+2. 恢复旧 Compose 和上一版本镜像摘要；
+3. 恢复升级前备份的 `/data` 目录。旧版本无法读取 v2 状态，因此不能直接复用已迁移的 `state.json`；
+4. 启动旧容器并重新验证查询与通知行为。
 
 ## 权限与生产边界
 
-- 仓库代码和镜像发布不等于 NAS 已完成部署；
-- 程序只负责监控与通知，不会自动修改播放器服务器地址；
-- Hermes 只负责通知，不执行自动修复；
-- NAS 容器替换、Hermes 路由和真实凭据变更必须单独审批与验证。
+- 合并代码和发布镜像不等于 NAS 已部署；
+- 程序不会修改播放器、DNS、Hermes 路由或企业微信配置；
+- 生产容器替换、凭据调整和回滚必须单独审批并核验。

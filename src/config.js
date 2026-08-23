@@ -3,6 +3,7 @@
 const path = require('node:path');
 
 const DEFAULT_API_URL = 'https://api.ugnas.com/api/p2p/v2/ta/nodeInfo/byAlias';
+const NOTIFICATION_DRIVERS = new Set(['hermes', 'wecom', 'generic']);
 
 function parseInteger(env, name, defaultValue, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   const raw = env[name];
@@ -36,23 +37,74 @@ function parseHttpUrl(value, name) {
   return url.toString();
 }
 
+function isWecomWebhook(value) {
+  if (!value) return false;
+  try {
+    return new URL(value).hostname === 'qyapi.weixin.qq.com';
+  } catch {
+    return false;
+  }
+}
+
+function inferNotificationDriver(env) {
+  const explicit = env.NOTIFICATION_DRIVER?.trim().toLowerCase();
+  if (explicit) {
+    if (!NOTIFICATION_DRIVERS.has(explicit)) {
+      throw new Error('NOTIFICATION_DRIVER must be hermes, wecom, or generic');
+    }
+    return explicit;
+  }
+  if (env.HERMES_WEBHOOK_SECRET || env.HERMES_WEBHOOK_URL) return 'hermes';
+  if (env.WECOM_WEBHOOK_URL || isWecomWebhook(env.WEBHOOK_URL)) return 'wecom';
+  if (env.GENERIC_WEBHOOK_URL || env.WEBHOOK_URL) return 'generic';
+  throw new Error('notification configuration is required');
+}
+
+function loadNotificationConfig(env) {
+  const driver = inferNotificationDriver(env);
+  if (driver === 'hermes') {
+    const rawUrl = env.HERMES_WEBHOOK_URL || env.WEBHOOK_URL;
+    if (!rawUrl) throw new Error('HERMES_WEBHOOK_URL is required for the hermes driver');
+    if (!env.HERMES_WEBHOOK_SECRET) {
+      throw new Error('HERMES_WEBHOOK_SECRET is required for the hermes driver');
+    }
+    return {
+      driver,
+      url: parseHttpUrl(rawUrl, 'HERMES_WEBHOOK_URL'),
+      secret: env.HERMES_WEBHOOK_SECRET,
+      usedCompatibilityUrl: !env.HERMES_WEBHOOK_URL && Boolean(env.WEBHOOK_URL)
+    };
+  }
+  if (driver === 'wecom') {
+    const rawUrl = env.WECOM_WEBHOOK_URL || env.WEBHOOK_URL;
+    if (!rawUrl) throw new Error('WECOM_WEBHOOK_URL is required for the wecom driver');
+    return {
+      driver,
+      url: parseHttpUrl(rawUrl, 'WECOM_WEBHOOK_URL'),
+      usedCompatibilityUrl: !env.WECOM_WEBHOOK_URL && Boolean(env.WEBHOOK_URL)
+    };
+  }
+  const rawUrl = env.GENERIC_WEBHOOK_URL || env.WEBHOOK_URL;
+  if (!rawUrl) throw new Error('GENERIC_WEBHOOK_URL is required for the generic driver');
+  return {
+    driver,
+    url: parseHttpUrl(rawUrl, 'GENERIC_WEBHOOK_URL'),
+    token: env.GENERIC_WEBHOOK_TOKEN || null,
+    usedCompatibilityUrl: !env.GENERIC_WEBHOOK_URL && Boolean(env.WEBHOOK_URL)
+  };
+}
+
 function loadConfig(env = process.env) {
   const alias = (env.UG_ID || env.UGID || 'bmnd').trim();
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(alias)) {
     throw new Error('UG_ID must be a lowercase DNS label');
   }
 
-  const webhookValue = env.HERMES_WEBHOOK_URL || env.WEBHOOK_URL;
-  if (!webhookValue) throw new Error('HERMES_WEBHOOK_URL is required');
-  if (!env.HERMES_WEBHOOK_SECRET) throw new Error('HERMES_WEBHOOK_SECRET is required');
-
   const stateDir = path.resolve(env.STATE_DIR || '/data');
   return {
     alias,
     apiUrl: parseHttpUrl(env.UGLINK_API_URL || DEFAULT_API_URL, 'UGLINK_API_URL'),
-    webhookUrl: parseHttpUrl(webhookValue, 'HERMES_WEBHOOK_URL'),
-    webhookSecret: env.HERMES_WEBHOOK_SECRET,
-    usedLegacyWebhookVariable: !env.HERMES_WEBHOOK_URL && Boolean(env.WEBHOOK_URL),
+    notification: loadNotificationConfig(env),
     stateDir,
     stateFile: path.join(stateDir, 'state.json'),
     eventsFile: path.join(stateDir, 'events.jsonl'),
@@ -68,4 +120,12 @@ function loadConfig(env = process.env) {
   };
 }
 
-module.exports = { DEFAULT_API_URL, loadConfig, parseBoolean, parseInteger };
+module.exports = {
+  DEFAULT_API_URL,
+  inferNotificationDriver,
+  isWecomWebhook,
+  loadConfig,
+  loadNotificationConfig,
+  parseBoolean,
+  parseInteger
+};

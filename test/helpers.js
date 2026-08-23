@@ -9,9 +9,12 @@ async function testConfig(overrides = {}) {
   return {
     alias: 'bmnd',
     apiUrl: 'https://api.example.test/relay',
-    webhookUrl: 'https://hermes.example.test/webhooks/uglink-status',
-    webhookSecret: 'test-secret',
-    usedLegacyWebhookVariable: false,
+    notification: {
+      driver: 'hermes',
+      url: 'https://hermes.example.test/webhooks/uglink-status',
+      secret: 'test-secret',
+      usedCompatibilityUrl: false
+    },
     stateDir,
     stateFile: path.join(stateDir, 'state.json'),
     eventsFile: path.join(stateDir, 'events.jsonl'),

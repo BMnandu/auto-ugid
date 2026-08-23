@@ -2,7 +2,7 @@
   "name": "auto-ugid",
   "version": "2.0.0",
   "private": true,
-  "description": "Reliable UGLink relay domain monitor with Emby identity checks and Hermes notifications",
+  "description": "Reliable UGLink relay domain monitor with pluggable notification drivers",
   "engines": {
     "node": ">=22"
   },

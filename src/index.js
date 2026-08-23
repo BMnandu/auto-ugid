@@ -4,25 +4,26 @@
 const { loadConfig } = require('./config');
 const { Monitor } = require('./monitor');
 
-const HELP = `auto-ugid - monitor a UGLink relay domain
+const HELP = `auto-ugid - 通用 UGLink 中继域名监控器
 
-Usage:
+用法：
   node src/index.js [--once]
   node src/index.js --help
 
-Options:
-  --once   Run one check and exit
-  --help   Show this help without reading configuration
+选项：
+  --once   执行一次检查后退出
+  --help   显示帮助，不读取配置
 
-Required environment:
-  HERMES_WEBHOOK_URL       Hermes /webhooks/<route> URL
-  HERMES_WEBHOOK_SECRET    Per-route HMAC secret
+通知驱动：
+  NOTIFICATION_DRIVER     hermes、wecom 或 generic
 
-Common environment:
-  UG_ID                    UGLink alias (default: bmnd)
-  CHECK_INTERVAL           Seconds between checks (default: 600)
-  CONFIRMATION_DELAY       Seconds before confirming a change (default: 20)
-  STATE_DIR                Persistent state directory (default: /data)
+常用环境变量：
+  UG_ID                   UGLink alias（默认：bmnd）
+  CHECK_INTERVAL          检查周期秒数（默认：600）
+  CONFIRMATION_DELAY      二次确认等待秒数（默认：20）
+  STATE_DIR               持久化目录（默认：/data）
+
+驱动配置详见 README.md。
 `;
 
 function waitUntilNextCheck(ms, registerWake) {

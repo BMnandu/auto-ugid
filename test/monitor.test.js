@@ -8,38 +8,39 @@ const { Monitor } = require('../src/monitor');
 const { loadPending, loadState } = require('../src/storage');
 const { silentLogger, testConfig } = require('./helpers');
 
-function identity(serverId = 'server-1') {
-  return { serverId, serverName: 'Home', version: '4.9.0' };
+function captureDriver(delivered) {
+  return { name: 'capture', async deliver(event) { delivered.push(event); } };
 }
 
-test('first run establishes a healthy baseline without notifying', async () => {
+test('first run confirms and stores a full hostname without notifying', async () => {
   const config = await testConfig();
+  const domains = ['cn59.ug.link', 'cn59.ug.link'];
   const monitor = new Monitor(config, {
     logger: silentLogger(),
-    fetchRelayDomain: async () => 'bmnd.cn59.ug.link',
-    checkEmbyIdentity: async () => identity(),
-    fetchImpl: async () => { throw new Error('notification should not be sent'); },
+    fetchRelayDomain: async () => domains.shift(),
+    notificationDriver: captureDriver([]),
+    sleep: async () => {},
     now: () => 1700000000000
   });
   assert.equal((await monitor.checkOnce()).status, 'baseline_established');
   const state = (await loadState(config, silentLogger())).state;
+  assert.equal(state.version, 2);
   assert.equal(state.currentDomain, 'bmnd.cn59.ug.link');
-  assert.equal(state.serverId, 'server-1');
+  assert.equal('serverId' in state, false);
   assert.equal((await loadPending(config)).length, 0);
 });
 
-test('a confirmed healthy domain change commits and sends one event', async () => {
+test('a confirmed change commits a full hostname and sends a generic event', async () => {
   const config = await testConfig();
-  const domains = ['bmnd.cn59.ug.link', 'bmnd.cn60.ug.link', 'bmnd.cn60.ug.link'];
+  const domains = [
+    'cn59.ug.link', 'bmnd.cn59.ug.link',
+    'cn60.ug.link', 'bmnd.cn60.ug.link'
+  ];
   const delivered = [];
   const monitor = new Monitor(config, {
     logger: silentLogger(),
     fetchRelayDomain: async () => domains.shift(),
-    checkEmbyIdentity: async () => identity(),
-    fetchImpl: async (url, options) => {
-      delivered.push(JSON.parse(options.body));
-      return new Response('{}', { status: 200 });
-    },
+    notificationDriver: captureDriver(delivered),
     sleep: async () => {},
     now: () => 1700000000000
   });
@@ -49,50 +50,53 @@ test('a confirmed healthy domain change commits and sends one event', async () =
   assert.equal((await loadState(config, silentLogger())).state.currentDomain, 'bmnd.cn60.ug.link');
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].event_type, 'relay_changed');
-  assert.equal(delivered[0].emby_url, 'https://bmnd.cn60.ug.link/emby/');
+  assert.equal(delivered[0].old_url, 'https://bmnd.cn59.ug.link');
+  assert.equal(delivered[0].new_url, 'https://bmnd.cn60.ug.link');
+  assert.doesNotMatch(delivered[0].message, /Emby/);
+});
+
+test('different raw forms normalize to the same candidate during confirmation', async () => {
+  const config = await testConfig();
+  const domains = ['cn59.ug.link', 'bmnd.cn59.ug.link'];
+  const monitor = new Monitor(config, {
+    logger: silentLogger(),
+    fetchRelayDomain: async () => domains.shift(),
+    notificationDriver: captureDriver([]),
+    sleep: async () => {}
+  });
+  assert.equal((await monitor.checkOnce()).status, 'baseline_established');
 });
 
 test('an inconsistent candidate is discarded without changing state', async () => {
   const config = await testConfig();
-  const domains = ['bmnd.cn59.ug.link', 'bmnd.cn60.ug.link', 'bmnd.cn61.ug.link'];
+  const domains = [
+    'cn59.ug.link', 'cn59.ug.link',
+    'cn60.ug.link', 'cn61.ug.link'
+  ];
   const monitor = new Monitor(config, {
     logger: silentLogger(),
     fetchRelayDomain: async () => domains.shift(),
-    checkEmbyIdentity: async () => identity(),
-    fetchImpl: async () => new Response('{}', { status: 200 }),
+    notificationDriver: captureDriver([]),
     sleep: async () => {}
   });
   await monitor.checkOnce();
   assert.equal((await monitor.checkOnce()).status, 'candidate_unconfirmed');
   assert.equal((await loadState(config, silentLogger())).state.currentDomain, 'bmnd.cn59.ug.link');
-  assert.match(await fs.readFile(config.eventsFile, 'utf8'), /candidate_discarded/);
+  assert.match(await fs.readFile(config.eventsFile, 'utf8'), /confirmation_mismatch/);
 });
 
-test('a mismatched Emby identity alerts once and never commits', async () => {
+test('an invalid domain is audited but not committed or notified', async () => {
   const config = await testConfig();
-  const domains = ['bmnd.cn59.ug.link', 'bmnd.cn60.ug.link', 'bmnd.cn60.ug.link', 'bmnd.cn60.ug.link', 'bmnd.cn60.ug.link'];
-  let checks = 0;
   const delivered = [];
   const monitor = new Monitor(config, {
     logger: silentLogger(),
-    fetchRelayDomain: async () => domains.shift(),
-    checkEmbyIdentity: async (domain, expected) => {
-      checks += 1;
-      if (expected) throw new HttpError('mismatch', 'server_id_mismatch');
-      return identity();
-    },
-    fetchImpl: async (url, options) => {
-      delivered.push(JSON.parse(options.body));
-      return new Response('{}', { status: 200 });
-    },
-    sleep: async () => {}
+    fetchRelayDomain: async () => 'fakecn59.ug.link',
+    notificationDriver: captureDriver(delivered)
   });
-  await monitor.checkOnce();
-  await monitor.checkOnce();
-  await monitor.checkOnce();
-  assert.ok(checks >= 3);
-  assert.equal(delivered.filter((event) => event.event_type === 'candidate_unhealthy').length, 1);
-  assert.equal((await loadState(config, silentLogger())).state.currentDomain, 'bmnd.cn59.ug.link');
+  assert.equal((await monitor.checkOnce()).status, 'invalid_domain');
+  assert.equal((await loadState(config, silentLogger())).state.currentDomain, null);
+  assert.equal(delivered.length, 0);
+  assert.match(await fs.readFile(config.eventsFile, 'utf8'), /invalid_domain/);
 });
 
 test('source failure alerts once and emits one recovery event', async () => {
@@ -101,7 +105,8 @@ test('source failure alerts once and emits one recovery event', async () => {
     new HttpError('down', 'timeout'),
     new HttpError('down', 'timeout'),
     new HttpError('down', 'timeout'),
-    'bmnd.cn59.ug.link'
+    'cn59.ug.link',
+    'cn59.ug.link'
   ];
   const delivered = [];
   const monitor = new Monitor(config, {
@@ -111,11 +116,8 @@ test('source failure alerts once and emits one recovery event', async () => {
       if (value instanceof Error) throw value;
       return value;
     },
-    checkEmbyIdentity: async () => identity(),
-    fetchImpl: async (url, options) => {
-      delivered.push(JSON.parse(options.body));
-      return new Response('{}', { status: 200 });
-    }
+    notificationDriver: captureDriver(delivered),
+    sleep: async () => {}
   });
   await monitor.checkOnce();
   await monitor.checkOnce();

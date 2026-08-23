@@ -13,12 +13,20 @@ function validateRelayDomain(domain, alias) {
   return expectedDomainPattern(alias).test(domain);
 }
 
-function embyPublicInfoUrl(domain) {
-  return `https://${domain}/emby/System/Info/Public`;
+function normalizeRelayDomain(domain, alias) {
+  if (!validateRelayDomain(domain, alias)) {
+    throw new Error('relay domain did not match the allowlist');
+  }
+  return domain.startsWith(`${alias}.`) ? domain : `${alias}.${domain}`;
 }
 
-function embyBaseUrl(domain) {
-  return `https://${domain}/emby/`;
+function ugLinkUrl(domain) {
+  return `https://${domain}`;
 }
 
-module.exports = { embyBaseUrl, embyPublicInfoUrl, expectedDomainPattern, validateRelayDomain };
+module.exports = {
+  expectedDomainPattern,
+  normalizeRelayDomain,
+  ugLinkUrl,
+  validateRelayDomain
+};

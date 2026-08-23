@@ -1,9 +1,7 @@
 'use strict';
 
-const { checkEmbyIdentity } = require('./emby');
-const { validateRelayDomain } = require('./domain');
+const { normalizeRelayDomain, validateRelayDomain } = require('./domain');
 const {
-  candidateUnhealthyEvent,
   relayChangedEvent,
   sourceRecoveredEvent,
   sourceUnavailableEvent
@@ -21,6 +19,10 @@ function errorReason(error) {
   return error?.code || error?.message || 'unknown_error';
 }
 
+function safeAuditValue(value) {
+  return typeof value === 'string' ? value.slice(0, 253) : null;
+}
+
 class Monitor {
   constructor(config, dependencies = {}) {
     this.config = config;
@@ -29,7 +31,7 @@ class Monitor {
     this.now = dependencies.now || Date.now;
     this.sleep = dependencies.sleep || sleep;
     this.fetchRelayDomain = dependencies.fetchRelayDomain || fetchRelayDomain;
-    this.checkEmbyIdentity = dependencies.checkEmbyIdentity || checkEmbyIdentity;
+    this.notificationDriver = dependencies.notificationDriver;
     this.state = null;
   }
 
@@ -41,9 +43,10 @@ class Monitor {
         backup_file: loaded.corruptBackup.split('/').pop()
       }, this.now()));
     }
-    if (this.config.usedLegacyWebhookVariable) {
-      this.logger.warn('WEBHOOK_URL is deprecated; use HERMES_WEBHOOK_URL');
+    if (this.config.notification.usedCompatibilityUrl) {
+      this.logger.warn('WEBHOOK_URL is a compatibility alias; prefer the driver-specific URL variable');
     }
+    this.logger.info(`Notification driver: ${this.config.notification.driver}`);
     return loaded;
   }
 
@@ -60,6 +63,7 @@ class Monitor {
     return processPending(this.config, {
       logger: this.logger,
       fetchImpl: this.fetchImpl,
+      driver: this.notificationDriver,
       now: this.now
     });
   }
@@ -86,7 +90,7 @@ class Monitor {
     this.logger.error(`UGLink source query failed (${this.state.consecutiveSourceFailures}): ${errorReason(error)}`);
   }
 
-  async recordSourceSuccess(domain) {
+  async recordSourceSuccess() {
     const wasUnavailable = this.state.sourceAlertSent;
     const unavailableEventId = this.state.sourceAlertEventId;
     this.state.consecutiveSourceFailures = 0;
@@ -94,104 +98,43 @@ class Monitor {
     this.state.sourceAlertEventId = null;
     this.state.lastSuccessfulCheckAt = isoNow(this.now());
     if (wasUnavailable) {
-      const event = sourceRecoveredEvent(
+      await this.publish(sourceRecoveredEvent(
         this.config,
-        domain,
+        this.state.currentDomain,
         unavailableEventId || 'unknown-outage',
-        this.now()
-      );
-      await this.publish(event);
-    }
-    await this.save();
-  }
-
-  async reportCandidate(domain, reason) {
-    const key = `${domain || '(empty)'}:${reason}`;
-    if (this.state.candidateAlertKey === key) return;
-    const event = candidateUnhealthyEvent(
-      this.config,
-      this.state.currentDomain,
-      domain,
-      reason,
-      this.now()
-    );
-    await this.publish(event);
-    this.state.candidateAlertKey = key;
-    await this.save();
-  }
-
-  async establishInitialBaseline(domain) {
-    let identity;
-    try {
-      identity = await this.checkEmbyIdentity(domain, null, this.config, this.fetchImpl);
-    } catch (error) {
-      await this.reportCandidate(domain, errorReason(error));
-      return false;
-    }
-    this.state.currentDomain = domain;
-    this.state.serverId = identity.serverId;
-    this.state.candidateAlertKey = null;
-    this.state.lastChangeAt = isoNow(this.now());
-    await this.save();
-    this.logger.info(`Initial baseline established for ${domain}`);
-    if (this.config.notifyOnFirstRun) {
-      await this.publish(relayChangedEvent(
-        this.config,
-        '(first-run)',
-        domain,
-        identity.serverId,
         this.now()
       ));
     }
-    return true;
+    await this.save();
   }
 
-  async ensureServerIdBaseline(candidateDomain) {
-    if (this.state.serverId) return true;
-    const baselineDomain = this.state.currentDomain;
-    if (!validateRelayDomain(baselineDomain, this.config.alias)) {
-      await this.reportCandidate(candidateDomain, 'legacy_baseline_domain_invalid');
-      return false;
-    }
-    try {
-      const identity = await this.checkEmbyIdentity(
-        baselineDomain,
-        null,
-        this.config,
-        this.fetchImpl
-      );
-      this.state.serverId = identity.serverId;
-      await this.save();
-      this.logger.info('Emby Server ID baseline established from the committed domain');
-      return true;
-    } catch (error) {
-      await this.reportCandidate(candidateDomain, `baseline_${errorReason(error)}`);
-      return false;
-    }
+  async discardCandidate(domain, reason, secondDomain = null) {
+    await appendEvent(this.config, {
+      event_type: 'candidate_discarded',
+      occurred_at: isoNow(this.now()),
+      candidate_domain: safeAuditValue(domain),
+      second_candidate: safeAuditValue(secondDomain),
+      reason
+    });
+    this.logger.warn(`Candidate discarded: ${reason}`);
   }
 
   async confirmCandidate(candidateDomain) {
     await this.sleep(this.config.confirmationDelayMs);
-    let confirmed;
+    let rawConfirmed;
     try {
-      confirmed = await this.fetchRelayDomain(this.config, this.fetchImpl);
+      rawConfirmed = await this.fetchRelayDomain(this.config, this.fetchImpl);
     } catch (error) {
       await this.recordSourceFailure(error);
       return false;
     }
-    if (!validateRelayDomain(confirmed, this.config.alias)) {
-      await this.reportCandidate(confirmed, 'invalid_domain');
+    if (!validateRelayDomain(rawConfirmed, this.config.alias)) {
+      await this.discardCandidate(rawConfirmed, 'invalid_domain');
       return false;
     }
+    const confirmed = normalizeRelayDomain(rawConfirmed, this.config.alias);
     if (confirmed !== candidateDomain) {
-      await appendEvent(this.config, {
-        event_type: 'candidate_discarded',
-        occurred_at: isoNow(this.now()),
-        first_candidate: candidateDomain,
-        second_candidate: confirmed,
-        reason: 'confirmation_mismatch'
-      });
-      this.logger.warn('Candidate changed during confirmation and was discarded');
+      await this.discardCandidate(candidateDomain, 'confirmation_mismatch', confirmed);
       return false;
     }
     return true;
@@ -201,38 +144,24 @@ class Monitor {
     if (!this.state) await this.initialize();
     await this.processNotifications();
 
-    let candidateDomain;
+    let rawCandidate;
     try {
-      candidateDomain = await this.fetchRelayDomain(this.config, this.fetchImpl);
+      rawCandidate = await this.fetchRelayDomain(this.config, this.fetchImpl);
     } catch (error) {
       await this.recordSourceFailure(error);
       await this.processNotifications();
       return { status: 'source_error' };
     }
-    await this.recordSourceSuccess(candidateDomain);
+    await this.recordSourceSuccess();
 
-    if (!validateRelayDomain(candidateDomain, this.config.alias)) {
-      await this.reportCandidate(candidateDomain, 'invalid_domain');
+    if (!validateRelayDomain(rawCandidate, this.config.alias)) {
+      await this.discardCandidate(rawCandidate, 'invalid_domain');
       await this.processNotifications();
       return { status: 'invalid_domain' };
     }
-
-    if (!this.state.currentDomain) {
-      const established = await this.establishInitialBaseline(candidateDomain);
-      await this.processNotifications();
-      return { status: established ? 'baseline_established' : 'candidate_unhealthy' };
-    }
-
-    if (!(await this.ensureServerIdBaseline(candidateDomain))) {
-      await this.processNotifications();
-      return { status: 'baseline_unhealthy' };
-    }
+    const candidateDomain = normalizeRelayDomain(rawCandidate, this.config.alias);
 
     if (candidateDomain === this.state.currentDomain) {
-      if (this.state.candidateAlertKey) {
-        this.state.candidateAlertKey = null;
-        await this.save();
-      }
       this.logger.info('Relay domain unchanged');
       await this.processNotifications();
       return { status: 'unchanged' };
@@ -243,31 +172,27 @@ class Monitor {
       return { status: 'candidate_unconfirmed' };
     }
 
-    let identity;
-    try {
-      identity = await this.checkEmbyIdentity(
-        candidateDomain,
-        this.state.serverId,
-        this.config,
-        this.fetchImpl
-      );
-    } catch (error) {
-      await this.reportCandidate(candidateDomain, errorReason(error));
+    const oldDomain = this.state.currentDomain;
+    if (oldDomain === null) {
+      this.state.currentDomain = candidateDomain;
+      this.state.lastChangeAt = isoNow(this.now());
+      await this.save();
+      this.logger.info(`Initial baseline established for ${candidateDomain}`);
+      if (this.config.notifyOnFirstRun) {
+        await this.publish(relayChangedEvent(this.config, null, candidateDomain, this.now()));
+      }
       await this.processNotifications();
-      return { status: 'candidate_unhealthy' };
+      return { status: 'baseline_established' };
     }
 
-    const oldDomain = this.state.currentDomain;
     const event = relayChangedEvent(
       this.config,
       oldDomain,
       candidateDomain,
-      identity.serverId,
       this.now()
     );
     await this.publish(event);
     this.state.currentDomain = candidateDomain;
-    this.state.candidateAlertKey = null;
     this.state.lastChangeAt = isoNow(this.now());
     await this.save();
     await this.processNotifications();
@@ -276,4 +201,4 @@ class Monitor {
   }
 }
 
-module.exports = { Monitor, errorReason, sleep };
+module.exports = { Monitor, errorReason, safeAuditValue, sleep };

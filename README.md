@@ -1,5 +1,7 @@
 # auto-ugid
 
+**当前正式版本：`v1.2.1`**
+
 `auto-ugid` 是一个通用的 UGLink 中继域名监控器。它定期查询绿联官方 API，严格校验并延时二次确认中继域名变化，然后通过可插拔通知驱动发送完整访问地址。
 
 程序不再依赖 Emby 或其他具体业务服务。只要绿联 API 能返回有效中继域名，监控器就可以独立工作；域名没有变化时保持静默。
@@ -32,13 +34,15 @@ API 返回的 `cn59.ug.link` 和 `your-id.cn59.ug.link` 会被视为同一个中
 ### Hermes 驱动
 
 ```bash
+export AUTO_UGID_IMAGE_TAG='1.2.1'
 export UG_ID='your-id'
 export HERMES_WEBHOOK_SECRET='请替换为受控凭据'
 docker compose config
+docker compose pull
 docker compose up -d
 ```
 
-仓库中的 [`docker-compose.yaml`](docker-compose.yaml) 默认演示 Hermes 驱动。执行前请检查 URL、alias、持久化目录和镜像版本。
+仓库中的 [`docker-compose.yaml`](docker-compose.yaml) 默认使用正式镜像 `1.2.1` 并演示 Hermes 驱动，可通过 `AUTO_UGID_IMAGE_TAG` 固定其他版本或完整 Commit SHA。执行前请检查 URL、alias、持久化目录和镜像版本。
 
 ### 单次检查
 
@@ -52,6 +56,12 @@ npm run start -- --once
 
 ```bash
 npm run start -- --help
+```
+
+查看当前代码版本：
+
+```bash
+npm run start -- --version
 ```
 
 ## 通知驱动
@@ -203,6 +213,18 @@ UGLink 域名已更新：
 - 原子写回 `state.json`。
 
 JSON 状态通过临时文件、`fsync` 和原子 `rename` 更新。损坏文件会先保留为 `.corrupt-<时间>` 文件。
+
+## 版本与镜像发布
+
+项目采用 Semantic Versioning，`package.json` 的 `version` 是代码版本权威来源。正式 Git 标签使用 `vX.Y.Z`，发布后不得移动或覆盖。
+
+- 普通 `main` 合并只发布完整 Commit SHA 镜像；
+- 正式标签 `v1.2.1` 发布 `v1.2.1`、`1.2.1`、`1.2`、`1`、`latest` 与 Commit SHA；
+- `latest` 只代表最近一次正式稳定发布；
+- Compose 与生产环境应固定 `X.Y.Z`、Commit SHA 或镜像摘要，不把 `latest` 作为唯一回滚依据；
+- 历史 SHA 镜像继续保留，不追溯移动或伪造旧制品。
+
+正式发布顺序为：发布 PR 通过门禁并合并 → 在 Merge Commit 创建 annotated Git 标签 → 标签 CI 发布多架构镜像 → 创建同名 GitHub Release → 核验标签与摘要。制品发布不等于生产部署。
 
 ## 本地开发与测试
 

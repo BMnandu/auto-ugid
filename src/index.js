@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { version: VERSION } = require('../package.json');
 const { loadConfig } = require('./config');
 const { Monitor } = require('./monitor');
 
@@ -9,10 +10,12 @@ const HELP = `auto-ugid - 通用 UGLink 中继域名监控器
 用法：
   node src/index.js [--once]
   node src/index.js --help
+  node src/index.js --version
 
 选项：
-  --once   执行一次检查后退出
-  --help   显示帮助，不读取配置
+  --once      执行一次检查后退出
+  --help      显示帮助，不读取配置
+  --version   显示当前版本，不读取配置
 
 通知驱动：
   NOTIFICATION_DRIVER     hermes、wecom 或 generic
@@ -41,6 +44,10 @@ function waitUntilNextCheck(ms, registerWake) {
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--help')) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (argv.includes('--version')) {
+    process.stdout.write(VERSION + String.fromCharCode(10));
     return;
   }
   const unknown = argv.filter((arg) => arg !== '--once');
@@ -85,4 +92,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { HELP, main, waitUntilNextCheck };
+module.exports = { HELP, VERSION, main, waitUntilNextCheck };

@@ -1,7 +1,6 @@
 services:
   auto-ugid:
-    build: .
-    image: beiming712/auto-uglink:latest
+    image: beiming712/auto-uglink:${AUTO_UGID_IMAGE_TAG:-1.2.1}
     container_name: uglink
     restart: unless-stopped
     environment:
